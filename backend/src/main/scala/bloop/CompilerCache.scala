@@ -295,6 +295,9 @@ final class CompilerCache(
           }
         }.asJava
       }
+
+      override def isSameFile(a: FileObject, b: FileObject): Boolean =
+        a == b
     }
   }
 }
