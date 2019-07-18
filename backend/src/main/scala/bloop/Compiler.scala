@@ -35,30 +35,31 @@ import bloop.CompileMode.Sequential
 import monix.execution.ExecutionModel
 
 case class CompileInputs(
-    scalaInstance: ScalaInstance,
-    compilerCache: CompilerCache,
-    sources: Array[AbsolutePath],
-    classpath: Array[AbsolutePath],
-    uniqueInputs: UniqueCompileInputs,
-    //store: IRStore,
-    out: CompileOutPaths,
-    baseDirectory: AbsolutePath,
-    scalacOptions: Array[String],
-    javacOptions: Array[String],
-    compileOrder: CompileOrder,
-    classpathOptions: ClasspathOptions,
-    previousResult: PreviousResult,
-    previousCompilerResult: Compiler.Result,
-    reporter: ZincReporter,
-    logger: ObservedLogger[Logger],
-    mode: CompileMode,
-    dependentResults: Map[File, PreviousResult],
-    cancelPromise: Promise[Unit],
-    tracer: BraveTracer,
-    ioScheduler: Scheduler,
-    ioExecutor: Executor,
-    invalidatedClassFilesInDependentProjects: Set[File],
-    generatedClassFilePathsInDependentProjects: Map[String, File]
+                            javaInstance: JdkInstance,
+                            scalaInstance: ScalaInstance,
+                            compilerCache: CompilerCache,
+                            sources: Array[AbsolutePath],
+                            classpath: Array[AbsolutePath],
+                            uniqueInputs: UniqueCompileInputs,
+                            //store: IRStore,
+                            out: CompileOutPaths,
+                            baseDirectory: AbsolutePath,
+                            scalacOptions: Array[String],
+                            javacOptions: Array[String],
+                            compileOrder: CompileOrder,
+                            classpathOptions: ClasspathOptions,
+                            previousResult: PreviousResult,
+                            previousCompilerResult: Compiler.Result,
+                            reporter: ZincReporter,
+                            logger: ObservedLogger[Logger],
+                            mode: CompileMode,
+                            dependentResults: Map[File, PreviousResult],
+                            cancelPromise: Promise[Unit],
+                            tracer: BraveTracer,
+                            ioScheduler: Scheduler,
+                            ioExecutor: Executor,
+                            invalidatedClassFilesInDependentProjects: Set[File],
+                            generatedClassFilePathsInDependentProjects: Map[String, File]
 )
 
 case class CompileOutPaths(
@@ -411,9 +412,10 @@ object Compiler {
     }
 
     val start = System.nanoTime()
+    val javaInstance = compileInputs.javaInstance
     val scalaInstance = compileInputs.scalaInstance
     val classpathOptions = compileInputs.classpathOptions
-    val compilers = compileInputs.compilerCache.get(scalaInstance)
+    val compilers = compileInputs.compilerCache.get(javaInstance, scalaInstance)
     val inputs = tracer.trace("creating zinc inputs")(_ => getInputs(compilers))
 
     // We don't need nanosecond granularity, we're happy with milliseconds

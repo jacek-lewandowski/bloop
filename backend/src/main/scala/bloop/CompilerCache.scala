@@ -4,36 +4,26 @@ import java.io.File
 import java.lang.Iterable
 import java.io.PrintWriter
 import java.util.concurrent.ConcurrentHashMap
+
 import javax.tools.JavaFileManager.Location
 import javax.tools.JavaFileObject.Kind
-import javax.tools.{
-  FileObject,
-  ForwardingJavaFileManager,
-  StandardJavaFileManager,
-  ForwardingJavaFileObject,
-  JavaFileManager,
-  JavaFileObject,
-  JavaCompiler => JavaxCompiler
-}
-
+import javax.tools.{FileObject, ForwardingJavaFileManager, ForwardingJavaFileObject, JavaFileManager, JavaFileObject, StandardJavaFileManager, JavaCompiler => JavaxCompiler}
 import bloop.io.{AbsolutePath, Paths}
 import bloop.logging.Logger
-
 import sbt.librarymanagement.Resolver
-
 import xsbti.ComponentProvider
 import xsbti.compile.Compilers
 import xsbti.compile.{JavaCompiler => XJavaCompiler, JavaTool => XJavaTool}
 import xsbti.compile.ClassFileManager
 import xsbti.{Logger => XLogger, Reporter => XReporter}
-
 import sbt.internal.inc.bloop.ZincInternals
 import sbt.internal.inc.{AnalyzingCompiler, ZincLmUtil, ZincUtil}
 import sbt.internal.inc.javac.JavaTools
-import sbt.internal.inc.javac.{JavaCompiler, Javadoc, ForkedJava}
+import sbt.internal.inc.javac.{ForkedJava, JavaCompiler, Javadoc}
 import sbt.internal.util.LoggerWriter
 import sbt.internal.inc.javac.DiagnosticsReporter
 import java.io.IOException
+import java.nio.file.Files
 
 final class CompilerCache(
     componentProvider: ComponentProvider,
@@ -42,31 +32,37 @@ final class CompilerCache(
     userResolvers: List[Resolver]
 ) {
 
-  private val cache = new ConcurrentHashMap[ScalaInstance, Compilers]()
+  private case class CacheKey(javaInstance: JdkInstance, scalaInstance: ScalaInstance)
 
-  def get(scalaInstance: ScalaInstance): Compilers =
-    cache.computeIfAbsent(scalaInstance, newCompilers)
+  private val cache = new ConcurrentHashMap[CacheKey, Compilers]()
+
+  def get(javaInstance: JdkInstance, scalaInstance: ScalaInstance): Compilers = {
+    val key = CacheKey(javaInstance, scalaInstance)
+    cache.computeIfAbsent(key, newCompilers)
+  }
 
   private[bloop] def duplicateWith(logger: Logger): CompilerCache =
     new CompilerCache(componentProvider, retrieveDir, logger, userResolvers)
 
-  private val compileJavaHomeKey = "bloop.compilation.java-home"
-  private val compileJavaHome = Option(System.getProperty(compileJavaHomeKey))
-  private def newCompilers(scalaInstance: ScalaInstance): Compilers = {
-    val scalaCompiler = getScalaCompiler(scalaInstance, componentProvider)
-    val javaCompiler = {
-      compileJavaHome
-        .flatMap(javaHome => getForkedJavaCompiler(javaHome))
-        .orElse {
-          Option(javax.tools.ToolProvider.getSystemJavaCompiler)
-            .map(compiler => new BloopJavaCompiler(compiler))
-        }
-        .getOrElse(new BloopForkedJavaCompiler(None))
-    }
-
+  private def newCompilers(key: CacheKey): Compilers = {
+    val scalaCompiler = getScalaCompiler(key.scalaInstance, componentProvider)
+    val javaCompiler =
+      if (isSystemJava(key.javaInstance.javaHome))
+        getSystemJavaCompiler
+      else
+        getForkedJavaCompiler(key.javaInstance.javaHome.toString).getOrElse(getSystemJavaCompiler)
     val javaDoc = Javadoc.local.getOrElse(Javadoc.fork())
     val javaTools = JavaTools(javaCompiler, javaDoc)
     ZincUtil.compilers(javaTools, scalaCompiler)
+  }
+
+  private def isSystemJava(javaHome: AbsolutePath): Boolean =
+    Files.isSameFile(javaHome.toFile.toPath, JdkInstance.Default.javaHome.toFile.toPath)
+
+  private def getSystemJavaCompiler: XJavaCompiler = {
+    Option(javax.tools.ToolProvider.getSystemJavaCompiler)
+      .map(compiler => new BloopJavaCompiler(compiler))
+      .getOrElse(new BloopForkedJavaCompiler(None))
   }
 
   def getScalaCompiler(
@@ -98,7 +94,7 @@ final class CompilerCache(
       logger.debug(s"Instantiating a Java compiler from $javaHome")(DebugFilter.Compilation)
       Some(new BloopForkedJavaCompiler(Some(homeFile)))
     } else {
-      logger.warn(s"Ignoring non-existing Java home $compileJavaHome, using default")
+      logger.warn(s"Ignoring non-existing Java home $javaHome, using default")
       None
     }
   }
