@@ -960,6 +960,49 @@ abstract class ConfigGenerationSuite {
     assert(config.options.toSet == Set("-XX:MaxMetaSpaceSize=512m", "-Xms1g", "-Xmx2g"))
   }
 
+  @Test def importsTestSystemProperties(): Unit = {
+    val buildFile = testProjectDir.newFile("build.gradle")
+    writeBuildScript(
+      buildFile,
+      s"""
+         |plugins {
+         |  id 'bloop'
+         |}
+         |apply plugin: 'java'
+         |apply plugin: 'bloop'
+         |
+         |test.systemProperty("property", "value")
+         |test.jvmArgs = ["-XX:+UseG1GC", "-verbose:gc"]
+         |test.minHeapSize = "1g"
+         |test.maxHeapSize = "2g"
+         |
+      """.stripMargin
+    )
+
+    createHelloWorldJavaSource()
+    createHelloWorldJavaTestSource()
+
+    GradleRunner
+      .create()
+      .withGradleVersion(gradleVersion)
+      .withProjectDir(testProjectDir.getRoot)
+      .withPluginClasspath(getClasspath.asJava)
+      .withArguments("bloopInstall", "-Si")
+      .build()
+
+    val projectName = testProjectDir.getRoot.getName
+    val bloopDir = new File(testProjectDir.getRoot, ".bloop")
+    val projectFile = new File(bloopDir, s"${projectName}-test.json")
+    val projectConfig = readValidBloopConfig(projectFile)
+    assert(projectConfig.project.test.isDefined)
+    val platform = projectConfig.project.platform
+    assert(platform.isDefined)
+    assert(platform.get.isInstanceOf[Platform.Jvm])
+    val config = platform.get.asInstanceOf[Platform.Jvm].config
+    assert(config.options.toSet == Set("-XX:+UseG1GC", "-verbose:gc", "-Xms1g", "-Xmx2g", "-Dproperty=value"))
+  }
+
+
   @Test def maintainsClassPathOrder(): Unit = {
     val buildSettings = testProjectDir.newFile("settings.gradle")
     val buildDirA = testProjectDir.newFolder("a")
