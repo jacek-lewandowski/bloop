@@ -1,7 +1,5 @@
 package bloop
 
-import java.nio.file.{Path, Paths}
-
 import bloop.io.AbsolutePath
 
 case class JdkInstance private (jdkHome: AbsolutePath, options: Seq[String] = Seq.empty)
