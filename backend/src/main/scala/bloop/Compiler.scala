@@ -39,6 +39,7 @@ case class CompileInputs(
     compilerCache: CompilerCache,
     sources: Array[AbsolutePath],
     classpath: Array[AbsolutePath],
+    processorpath: Array[AbsolutePath],
     uniqueInputs: UniqueCompileInputs,
     //store: IRStore,
     out: CompileOutPaths,
@@ -369,6 +370,10 @@ object Compiler {
     def getCompilationOptions(inputs: CompileInputs): CompileOptions = {
       val sources = inputs.sources // Sources are all files
       val classpath = inputs.classpath.map(_.toFile)
+      val annotationProcessorOptions =
+        if (inputs.processorpath.isEmpty) List.empty[String]
+        else List("-processorpath", inputs.processorpath.mkString(":"))
+      val javacOptions = inputs.javacOptions ++ annotationProcessorOptions
 
       CompileOptions
         .create()
@@ -376,7 +381,7 @@ object Compiler {
         .withSources(sources.map(_.toFile))
         .withClasspath(classpath)
         .withScalacOptions(inputs.scalacOptions)
-        .withJavacOptions(inputs.javacOptions)
+        .withJavacOptions(javacOptions)
         .withClasspathOptions(inputs.classpathOptions)
         .withOrder(inputs.compileOrder)
     }
