@@ -35,31 +35,32 @@ import bloop.CompileMode.Sequential
 import monix.execution.ExecutionModel
 
 case class CompileInputs(
-                            javaInstance: JdkInstance,
-                            scalaInstance: ScalaInstance,
-                            compilerCache: CompilerCache,
-                            sources: Array[AbsolutePath],
-                            classpath: Array[AbsolutePath],
-                            uniqueInputs: UniqueCompileInputs,
-                            //store: IRStore,
-                            out: CompileOutPaths,
-                            baseDirectory: AbsolutePath,
-                            scalacOptions: Array[String],
-                            javacOptions: Array[String],
-                            compileOrder: CompileOrder,
-                            classpathOptions: ClasspathOptions,
-                            previousResult: PreviousResult,
-                            previousCompilerResult: Compiler.Result,
-                            reporter: ZincReporter,
-                            logger: ObservedLogger[Logger],
-                            mode: CompileMode,
-                            dependentResults: Map[File, PreviousResult],
-                            cancelPromise: Promise[Unit],
-                            tracer: BraveTracer,
-                            ioScheduler: Scheduler,
-                            ioExecutor: Executor,
-                            invalidatedClassFilesInDependentProjects: Set[File],
-                            generatedClassFilePathsInDependentProjects: Map[String, File]
+    javaInstance: JdkInstance,
+    scalaInstance: ScalaInstance,
+    compilerCache: CompilerCache,
+    sources: Array[AbsolutePath],
+    classpath: Array[AbsolutePath],
+    processorpath: Array[AbsolutePath],
+    uniqueInputs: UniqueCompileInputs,
+    //store: IRStore,
+    out: CompileOutPaths,
+    baseDirectory: AbsolutePath,
+    scalacOptions: Array[String],
+    javacOptions: Array[String],
+    compileOrder: CompileOrder,
+    classpathOptions: ClasspathOptions,
+    previousResult: PreviousResult,
+    previousCompilerResult: Compiler.Result,
+    reporter: ZincReporter,
+    logger: ObservedLogger[Logger],
+    mode: CompileMode,
+    dependentResults: Map[File, PreviousResult],
+    cancelPromise: Promise[Unit],
+    tracer: BraveTracer,
+    ioScheduler: Scheduler,
+    ioExecutor: Executor,
+    invalidatedClassFilesInDependentProjects: Set[File],
+    generatedClassFilePathsInDependentProjects: Map[String, File]
 )
 
 case class CompileOutPaths(
@@ -370,6 +371,10 @@ object Compiler {
     def getCompilationOptions(inputs: CompileInputs): CompileOptions = {
       val sources = inputs.sources // Sources are all files
       val classpath = inputs.classpath.map(_.toFile)
+      val annotationProcessorOptions =
+        if (inputs.processorpath.isEmpty) List.empty[String]
+        else List("-processorpath", inputs.processorpath.mkString(":"))
+      val javacOptions = inputs.javacOptions ++ annotationProcessorOptions
 
       CompileOptions
         .create()
@@ -377,7 +382,7 @@ object Compiler {
         .withSources(sources.map(_.toFile))
         .withClasspath(classpath)
         .withScalacOptions(inputs.scalacOptions)
-        .withJavacOptions(inputs.javacOptions)
+        .withJavacOptions(javacOptions)
         .withClasspathOptions(inputs.classpathOptions)
         .withOrder(inputs.compileOrder)
     }

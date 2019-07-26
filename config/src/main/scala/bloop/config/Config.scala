@@ -219,6 +219,7 @@ object Config {
       sources: List[Path],
       dependencies: List[String],
       classpath: List[Path],
+      processorpath: List[Path],
       out: Path,
       classesDir: Path,
       resources: Option[List[Path]],
@@ -232,7 +233,7 @@ object Config {
 
   object Project {
     // FORMAT: OFF
-    private[bloop] val empty: Project = Project("", emptyPath, List(), List(), List(), emptyPath, emptyPath, None, None, None, None, None, None, None)
+    private[bloop] val empty: Project = Project("", emptyPath, List(), List(), List(), List(), emptyPath, emptyPath, None, None, None, None, None, None, None)
     // FORMAT: ON
 
     def analysisFileName(projectName: String) = s"$projectName-analysis.bin"
@@ -252,6 +253,10 @@ object Config {
       // Just add one classpath with the scala library in it
       val scalaLibraryJar = Files.createTempFile("scala-library", ".jar")
       scalaLibraryJar.toFile.deleteOnExit()
+
+      val annotationProcessorJar = Files.createTempFile("annotation-processor", ".jar")
+      annotationProcessorJar.toFile.deleteOnExit()
+
 
       // This is like `target` in sbt.
       val outDir = Files.createTempFile("out", "test")
@@ -274,6 +279,7 @@ object Config {
         List(sourceFile),
         List("dummy-2"),
         List(scalaLibraryJar),
+        List(annotationProcessorJar),
         outDir,
         classesDir,
         Some(List(outDir.resolve("resource1.xml"))),
