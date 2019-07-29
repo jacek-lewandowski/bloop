@@ -32,7 +32,7 @@ object CompileSpec extends bloop.testing.BaseSuite {
         val `A1.java` =
           """/A.java
             |public class A {
-            |  public static void method() {}
+            |  public static void method1() {}
             |  public static void dummy() {}
             |}
           """.stripMargin
@@ -41,7 +41,7 @@ object CompileSpec extends bloop.testing.BaseSuite {
           """/B.java
             |public class B {
             |  public void callA() {
-            |    A.method();
+            |    A.method1();
             |  }
             |}
           """.stripMargin
@@ -60,7 +60,7 @@ object CompileSpec extends bloop.testing.BaseSuite {
         val `A2.java` =
           """/A.java
             |public class A {
-            |  public static void methodRenamed() {}
+            |  public static void method2() {}
             |  public static void dummy() {}
             |}
           """.stripMargin
@@ -69,7 +69,24 @@ object CompileSpec extends bloop.testing.BaseSuite {
           """/B.java
             |public class B {
             |  public void callA() {
-            |    A.methodRenamed();
+            |    A.method2();
+            |  }
+            |}
+          """.stripMargin
+
+        val `A3.java` =
+          """/A.java
+            |public class A {
+            |  public static void method3() {}
+            |  public static void dummy() {}
+            |}
+          """.stripMargin
+
+        val `B3.java` =
+          """/B.java
+            |public class B {
+            |  public void callA() {
+            |    A.method3();
             |  }
             |}
           """.stripMargin
@@ -100,16 +117,26 @@ object CompileSpec extends bloop.testing.BaseSuite {
         Sources.`A1.java`, Sources.`B1.java`, Sources.`O.java`,
         Sources.`C.scala`, Sources.`Dummy1.scala`, Sources.`Dummy2.scala`))
       val projects = List(project)
-      val state = loadState(workspace, projects, logger)
-      val compiledState = state.compile(project)
+      val state1 = loadState(workspace, projects, logger)
+      val compiledState = state1.compile(project)
       assert(compiledState.status == ExitStatus.Ok)
       assertValidCompilationState(compiledState, projects)
+
+      val buildProject = state1.build.getProjectFor(project.config.name).get
+      val externalClassesDir = state1.client.getUniqueClassesDirFor(buildProject)
+      val classCPath = externalClassesDir.resolve(RelativePath("C.class")).toFile.toPath
+      val modifiedTimeOfC = Files.getLastModifiedTime(classCPath)
+
       writeFile(project.srcFor("A.java"), Sources.`A2.java`)
       writeFile(project.srcFor("B.java"), Sources.`B2.java`)
 
-      val newState = compiledState.compile(project)
-      assert(newState.status == ExitStatus.Ok)
-      assertValidCompilationState(newState, projects)
+      val state2 = compiledState.compile(project)
+      assert(state2.status == ExitStatus.Ok)
+      assertValidCompilationState(state2, projects)
+
+      // Assert that we didn't recompile class C:
+      val newModifiedTimeOfC = Files.getLastModifiedTime(classCPath)
+      assert(modifiedTimeOfC == newModifiedTimeOfC)
     }
   }
 
