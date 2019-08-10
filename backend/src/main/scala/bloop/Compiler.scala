@@ -13,6 +13,8 @@ import bloop.tracing.BraveTracer
 import bloop.logging.{ObservedLogger, Logger}
 import bloop.reporter.{ProblemPerPhase, ZincReporter}
 import bloop.util.{AnalysisUtils, UUIDUtil, CacheHashCode}
+import bloop.CompileMode.Pipelined
+import bloop.CompileMode.Sequential
 
 import xsbti.compile._
 import xsbti.T2
@@ -30,9 +32,8 @@ import scala.collection.mutable
 import monix.eval.Task
 import monix.execution.Scheduler
 import monix.execution.CancelableFuture
-import bloop.CompileMode.Pipelined
-import bloop.CompileMode.Sequential
 import monix.execution.ExecutionModel
+import sbt.internal.inc.bloop.internal.BloopStamps
 
 case class CompileInputs(
     javaInstance: JdkInstance,
@@ -168,7 +169,8 @@ object Compiler {
         products: CompileProducts,
         elapsed: Long,
         backgroundTasks: CompileBackgroundTasks,
-        isNoOp: Boolean
+        isNoOp: Boolean,
+        reportedFatalWarnings: Boolean
     ) extends Result
         with CacheHashCode
 
@@ -189,7 +191,7 @@ object Compiler {
 
     object Ok {
       def unapply(result: Result): Option[Result] = result match {
-        case s @ (Success(_, _, _, _, _, _) | Empty) => Some(s)
+        case s @ (Success(_, _, _, _, _, _, _) | Empty) => Some(s)
         case _ => None
       }
     }
@@ -365,6 +367,7 @@ object Compiler {
       }
     }
 
+    var isFatalWarningsEnabled: Boolean = false
     def getInputs(compilers: Compilers): Inputs = {
       val options = getCompilationOptions(compileInputs)
       val setup = getSetup(compileInputs)
@@ -378,13 +381,24 @@ object Compiler {
         if (inputs.processorpath.isEmpty) List.empty[String]
         else List("-processorpath", inputs.processorpath.mkString(":"))
       val javacOptions = inputs.javacOptions ++ annotationProcessorOptions
+      val optionsWithoutFatalWarnings = inputs.scalacOptions.flatMap { option =>
+        if (option != "-Xfatal-warnings") List(option)
+        else {
+          if (!isFatalWarningsEnabled) isFatalWarningsEnabled = true
+          Nil
+        }
+      }
+
+      // Enable fatal warnings in the reporter if they are enabled in the build
+      if (isFatalWarningsEnabled)
+        inputs.reporter.enableFatalWarnings()
 
       CompileOptions
         .create()
         .withClassesDirectory(newClassesDir.toFile)
         .withSources(sources.map(_.toFile))
         .withClasspath(classpath)
-        .withScalacOptions(inputs.scalacOptions)
+        .withScalacOptions(optionsWithoutFatalWarnings)
         .withJavacOptions(javacOptions)
         .withClasspathOptions(inputs.classpathOptions)
         .withOrder(inputs.compileOrder)
@@ -471,13 +485,17 @@ object Compiler {
         case Success(_) if cancelPromise.isCompleted => handleCancellation
         case Success(result) =>
           // Report end of compilation only after we have reported all warnings from previous runs
-          reporter.reportEndCompilation(previousSuccessfulProblems, bsp.StatusCode.Ok)
+          val sourcesWithFatal = reporter.getSourceFilesWithFatalWarnings
+          val reportedFatalWarnings = isFatalWarningsEnabled && sourcesWithFatal.nonEmpty
+          val code = if (reportedFatalWarnings) bsp.StatusCode.Error else bsp.StatusCode.Ok
+          reporter.reportEndCompilation(previousSuccessfulProblems, code)
 
           // Compute the results we should use for dependent compilations and new compilation runs
           val resultForDependentCompilationsInSameRun =
             PreviousResult.of(Optional.of(result.analysis()), Optional.of(result.setup()))
+          val analysis = result.analysis()
           val analysisForFutureCompilationRuns =
-            rebaseAnalysisClassFiles(result.analysis(), readOnlyClassesDir, newClassesDir)
+            rebaseAnalysisClassFiles(analysis, readOnlyClassesDir, newClassesDir, sourcesWithFatal)
           val resultForFutureCompilationRuns = resultForDependentCompilationsInSameRun.withAnalysis(
             Optional.of(analysisForFutureCompilationRuns)
           )
@@ -510,7 +528,7 @@ object Compiler {
           }
 
           val definedMacroSymbols = mode.oracle.collectDefinedMacroSymbols
-          val isNoOp = previousAnalysis.exists(_ == result.analysis())
+          val isNoOp = previousAnalysis.contains(analysis)
           if (isNoOp) {
             // If no-op, return previous result
             val products = CompileProducts(
@@ -538,15 +556,15 @@ object Compiler {
               products,
               elapsed,
               backgroundTasks,
-              isNoOp
+              isNoOp,
+              reportedFatalWarnings
             )
           } else {
             val persistTask = {
               val persistOut = compileOut.analysisOut
               val setup = result.setup
-              val analysis = analysisForFutureCompilationRuns
               // Important to memoize it, it's triggered by different clients
-              Task(persist(persistOut, analysis, setup, tracer, logger)).memoize
+              Task(persist(persistOut, analysisForFutureCompilationRuns, setup, tracer, logger)).memoize
             }
 
             // Delete all those class files that were invalidated in the external classes dir
@@ -600,7 +618,8 @@ object Compiler {
               products,
               elapsed,
               backgroundTasksExecution,
-              isNoOp
+              isNoOp,
+              reportedFatalWarnings
             )
           }
         case Failure(_: xsbti.CompileCancelled) => handleCancellation
@@ -610,7 +629,7 @@ object Compiler {
           cause match {
             case f: StopPipelining => Result.Blocked(f.failedProjectNames)
             case f: xsbti.CompileFailed =>
-              // We cannot assert reporter.problems == f.problems, so we aggregate them together
+              // We cannot guarantee reporter.problems == f.problems, so we aggregate them together
               val reportedProblems = reporter.allProblemsPerPhase.toList
               val rawProblemsFromReporter = reportedProblems.iterator.map(_.problem).toSet
               val newProblems = f.problems().flatMap { p =>
@@ -694,7 +713,8 @@ object Compiler {
   def rebaseAnalysisClassFiles(
       analysis0: xsbti.compile.CompileAnalysis,
       readOnlyClassesDir: Path,
-      newClassesDir: Path
+      newClassesDir: Path,
+      sourceFilesWithFatalWarnings: scala.collection.Set[File]
   ): Analysis = {
     // Cast to the only internal analysis that we support
     val analysis = analysis0.asInstanceOf[Analysis]
@@ -710,13 +730,21 @@ object Compiler {
     val newStamps = {
       import sbt.internal.inc.Stamps
       val oldStamps = analysis.stamps
-      val oldProducts = oldStamps.products.map {
+      // Use empty stamps for files that have fatal warnings so that next compile recompiles them
+      val rebasedSources = oldStamps.sources.map {
+        case t @ (file, _) =>
+          // Assumes file in reported diagnostic matches path in here
+          val fileHasFatalWarnings = sourceFilesWithFatalWarnings.contains(file)
+          if (!fileHasFatalWarnings) t
+          else file -> BloopStamps.emptyStampFor(file)
+      }
+      val rebasedProducts = oldStamps.products.map {
         case t @ (file, _) =>
           val rebased = rebase(file)
           if (rebased == file) t else rebased -> t._2
       }
       // Changes the paths associated with the class file paths
-      Stamps(oldProducts, oldStamps.sources, oldStamps.binaries)
+      Stamps(rebasedProducts, rebasedSources, oldStamps.binaries)
     }
 
     val newRelations = {
