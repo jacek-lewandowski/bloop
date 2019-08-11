@@ -137,7 +137,6 @@ object Project {
           )
         }
       }
-      .orElse(ScalaInstance.scalaInstanceForJavaProjects(logger)(ec))
 
     val setup = project.`scala`.flatMap(_.setup).getOrElse(Config.CompileSetup.empty)
     val platform = project.platform match {
