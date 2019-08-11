@@ -650,14 +650,25 @@ final class BloopBspServices(
                 else bsp.BuildTargetTag.Library
               }
               val deps = p.dependencies.iterator.flatMap(build.getProjectFor(_).toList)
-              val extra = p.scalaInstance.map(i => encodeScalaBuildTarget(toScalaBuildTarget(p, i)))
+
+              // Dirty hack to get a right Scala instance in a multi-module project - just take it from any other
+              // module that defines it. Obviously won't work properly for projects that mix different Scala versions
+              // in different modules, but should be ok for projects with mixed Scala + Java modules.
+              // TODO: just set to None when IntelliJ IDEA BSP integration supports modules with no Scala SDK
+              val scalaInstance = p.scalaInstance match {
+                case None => projects.map(_.scalaInstance)
+                  .find(_.isDefined).flatten
+                  .orElse(ScalaInstance.scalaInstanceForJavaProjects(logger)(ioScheduler))
+                case other => other
+              }
+
+              val extra = scalaInstance.map(i => encodeScalaBuildTarget(toScalaBuildTarget(p, i)))
               val capabilities = bsp.BuildTargetCapabilities(
                 canCompile = true,
                 canTest = true,
                 canRun = true
               )
-              val javaInstance = ScalaInstance.scalaInstanceForJavaProjects(logger)(ioScheduler)
-              val isJavaOnly = p.scalaInstance == javaInstance
+              val isJavaOnly = p.scalaInstance.isEmpty
               val languageIds =
                 if (isJavaOnly) BloopBspServices.JavaOnly
                 else BloopBspServices.DefaultLanguages
