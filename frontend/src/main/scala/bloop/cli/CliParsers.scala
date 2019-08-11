@@ -117,6 +117,7 @@ object CliParsers {
   implicit val compileParser: Parser[Commands.Compile] = Parser.generic
   implicit val configureParser: Parser[Commands.Configure] = Parser.generic
   implicit val helpParser: Parser[Commands.Help] = Parser.generic
+  implicit val jmhParser: Parser[Commands.Benchmark] = Parser.generic
   implicit val projectsParser: Parser[Commands.Projects] = Parser.generic
   implicit val runParser: Parser[Commands.Run] = Parser.generic
   implicit val testParser: Parser[Commands.Test] = Parser.generic

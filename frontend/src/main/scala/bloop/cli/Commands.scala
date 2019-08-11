@@ -31,7 +31,7 @@ object Commands {
     def pipeline: Boolean
   }
 
-  sealed trait LinkingCommand extends CompilingCommand {
+  sealed trait RunCommand extends CompilingCommand {
     def main: Option[String]
     def optimize: Option[OptimizerConfig]
   }
@@ -146,6 +146,34 @@ object Commands {
       parallel: Boolean = false
   ) extends CompilingCommand
 
+  case class Benchmark(
+      @ExtraName("p")
+      @ExtraName("project")
+      @HelpMessage("The project to benchmark (will be inferred from remaining cli args).")
+      projects: List[String] = Nil,
+      @ExtraName("propagate")
+      @HelpMessage("Test a project and all its dependencies. By default, false.")
+      includeDependencies: Boolean = false,
+      @HelpMessage("Test a project and all projects depending on it. By default, false.")
+      cascade: Boolean = false,
+      @HelpMessage("Compile the project incrementally. By default, true.")
+      incremental: Boolean = true,
+      @HelpMessage("Pipeline the compilation of modules in your build. By default, false.")
+      pipeline: Boolean = false,
+      @HelpMessage("The arguments to pass in to the benchmark framework.")
+      args: List[String] = Nil,
+      @HelpMessage("Pick reporter to show compilation messages. By default, bloop's used.")
+      reporter: ReporterKind = BloopReporter,
+      @ExtraName("w")
+      @HelpMessage("Run the command when projects' source files change. By default, false.")
+      watch: Boolean = false,
+      @HelpMessage("Ignore arguments starting with `-J` and forward them instead.")
+      skipJargs: Boolean = false,
+      @ExtraName("O")
+      @HelpMessage("If an optimizer is used (e.g. Scala Native or Scala.js), run it in `debug` or `release` mode. Defaults to `release`.")
+      optimize: Option[OptimizerConfig] = Some(OptimizerConfig.Release),
+      @Recurse cliOptions: CliOptions = CliOptions.default) extends CompilingCommand
+
   case class Console(
       @ExtraName("p")
       @ExtraName("project")
@@ -199,7 +227,7 @@ object Commands {
       )
       optimize: Option[OptimizerConfig] = None,
       @Recurse cliOptions: CliOptions = CliOptions.default
-  ) extends LinkingCommand
+  ) extends RunCommand
 
   case class Link(
       @ExtraName("project")
@@ -224,5 +252,5 @@ object Commands {
       )
       optimize: Option[OptimizerConfig] = None,
       @Recurse cliOptions: CliOptions = CliOptions.default
-  ) extends LinkingCommand
+  ) extends RunCommand
 }

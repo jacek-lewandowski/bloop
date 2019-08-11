@@ -196,6 +196,11 @@ object Cli {
                     newCommand.cliOptions
                   )
                 }
+              case Right(c: Commands.Benchmark) =>
+                val newCommand = c.copy(cliOptions = c.cliOptions.copy(common = commonOptions))
+                withNonEmptyProjects(c.projects, commandName, remainingArgs, commonOptions) { ps =>
+                  run(newCommand.copy(projects = ps), newCommand.cliOptions)
+                }
               case Right(c: Commands.Run) =>
                 val newCommand = c.copy(cliOptions = c.cliOptions.copy(common = commonOptions))
                 withNonEmptyProjects(c.projects, commandName, remainingArgs, commonOptions) { ps =>

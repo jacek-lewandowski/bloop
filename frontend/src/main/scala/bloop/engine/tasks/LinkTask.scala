@@ -1,6 +1,6 @@
 package bloop.engine.tasks
 
-import bloop.cli.Commands.LinkingCommand
+import bloop.cli.Commands.RunCommand
 import bloop.cli.{ExitStatus, OptimizerConfig}
 import bloop.config.Config
 import bloop.data.{Platform, Project}
@@ -11,12 +11,12 @@ import monix.eval.Task
 
 object LinkTask {
   def linkMainWithJs(
-      cmd: LinkingCommand,
-      project: Project,
-      state: State,
-      mainClass: String,
-      target: AbsolutePath,
-      platform: Platform.Js
+                        cmd: RunCommand,
+                        project: Project,
+                        state: State,
+                        mainClass: String,
+                        target: AbsolutePath,
+                        platform: Platform.Js
   ): Task[State] = {
     val config0 = platform.config
     platform.toolchain match {
@@ -45,12 +45,12 @@ object LinkTask {
   }
 
   def linkMainWithNative(
-      cmd: LinkingCommand,
-      project: Project,
-      state: State,
-      mainClass: String,
-      target: AbsolutePath,
-      platform: Platform.Native
+                            cmd: RunCommand,
+                            project: Project,
+                            state: State,
+                            mainClass: String,
+                            target: AbsolutePath,
+                            platform: Platform.Native
   ): Task[State] = {
     val config0 = platform.config
     platform.toolchain match {

@@ -250,4 +250,9 @@ object Tasks {
     state.build.getProjectFor(s"$projectName-test").orElse(state.build.getProjectFor(projectName))
   }
 
+  private[bloop] def pickBenchmarkProject(projectName: String, state: State): Option[Project] = {
+    state.build.getProjectFor(s"$projectName-jmh").orElse(state.build.getProjectFor(projectName))
+  }
+
+
 }
