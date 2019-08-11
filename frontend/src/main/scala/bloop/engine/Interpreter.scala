@@ -9,7 +9,7 @@ import bloop.io.{AbsolutePath, RelativePath, SourceWatcher}
 import bloop.logging.{DebugFilter, Logger, NoopLogger}
 import bloop.testing.{LoggingEventHandler, TestInternals}
 import bloop.engine.tasks.{CompileTask, LinkTask, Tasks, TestTask}
-import bloop.cli.Commands.CompilingCommand
+import bloop.cli.Commands.{CompilingCommand, RunCommand}
 import bloop.cli.Validate
 import bloop.data.{ClientInfo, Platform, Project}
 import bloop.engine.Feedback.XMessageString
@@ -21,12 +21,18 @@ import monix.eval.Task
 import scala.concurrent.Promise
 import java.nio.file.Files
 import java.nio.charset.StandardCharsets
+
 import bloop.ScalaInstance
+
 import scala.collection.immutable.Nil
 import scala.annotation.tailrec
 import java.io.IOException
 
+import bloop.engine.Interpreter.reportMissing
+
 object Interpreter {
+
+
   // This is stack-safe because of Monix's trampolined execution
   def execute(action: Action, stateTask: Task[State]): Task[State] = {
     def execute(action: Action, stateTask: Task[State]): Task[State] = {
@@ -66,6 +72,8 @@ object Interpreter {
                     execute(next, compile(cmd, state))
                   case cmd: Commands.Console =>
                     execute(next, console(cmd, state))
+                  case cmd: Commands.Benchmark =>
+                    execute(next, benchmark(cmd, state))
                   case cmd: Commands.Projects =>
                     execute(next, showProjects(cmd, state))
                   case cmd: Commands.Test =>
@@ -529,44 +537,48 @@ object Interpreter {
     }
   }
 
+  private def runMain(project: Project, cmd: Commands.Run)(state: State): Task[State] = {
+    val cwd = project.baseDirectory
+    getMainClass(state, project, cmd.main) match {
+      case Left(failedState) => Task.now(failedState)
+      case Right(mainClass) =>
+        project.platform match {
+          case platform @ Platform.Native(config, _, _) =>
+            val target = ScalaNativeToolchain.linkTargetFrom(project, config)
+            LinkTask
+              .linkMainWithNative(cmd, project, state, mainClass, target, platform)
+              .flatMap { state =>
+                val args = (target.syntax +: cmd.args).toArray
+                if (!state.status.isOk) Task.now(state)
+                else Tasks.runNativeOrJs(state, project, cwd, mainClass, args)
+              }
+          case platform @ Platform.Js(config, _, _) =>
+            val target = ScalaJsToolchain.linkTargetFrom(project, config)
+            LinkTask.linkMainWithJs(cmd, project, state, mainClass, target, platform).flatMap {
+              state =>
+                // We use node to run the program (is this a special case?)
+                val args = ("node" +: target.syntax +: cmd.args).toArray
+                if (!state.status.isOk) Task.now(state)
+                else Tasks.runNativeOrJs(state, project, cwd, mainClass, args)
+            }
+          case Platform.Jvm(javaEnv, _, _) =>
+            Tasks.runJVM(
+              state,
+              project,
+              javaEnv,
+              cwd,
+              mainClass,
+              cmd.args.toArray,
+              cmd.skipJargs
+            )
+        }
+    }
+  }
+
   private def run(cmd: Commands.Run, state: State): Task[State] = {
     def doRun(project: Project)(state: State): Task[State] = {
-      val cwd = project.baseDirectory
       compileAnd(cmd, state, List(project), false, "`run`") { state =>
-        getMainClass(state, project, cmd.main) match {
-          case Left(failedState) => Task.now(failedState)
-          case Right(mainClass) =>
-            project.platform match {
-              case platform @ Platform.Native(config, _, _) =>
-                val target = ScalaNativeToolchain.linkTargetFrom(project, config)
-                LinkTask
-                  .linkMainWithNative(cmd, project, state, mainClass, target, platform)
-                  .flatMap { state =>
-                    val args = (target.syntax +: cmd.args).toArray
-                    if (!state.status.isOk) Task.now(state)
-                    else Tasks.runNativeOrJs(state, project, cwd, mainClass, args)
-                  }
-              case platform @ Platform.Js(config, _, _) =>
-                val target = ScalaJsToolchain.linkTargetFrom(project, config)
-                LinkTask.linkMainWithJs(cmd, project, state, mainClass, target, platform).flatMap {
-                  state =>
-                    // We use node to run the program (is this a special case?)
-                    val args = ("node" +: target.syntax +: cmd.args).toArray
-                    if (!state.status.isOk) Task.now(state)
-                    else Tasks.runNativeOrJs(state, project, cwd, mainClass, args)
-                }
-              case Platform.Jvm(javaEnv, _, _) =>
-                Tasks.runJVM(
-                  state,
-                  project,
-                  javaEnv,
-                  cwd,
-                  mainClass,
-                  cmd.args.toArray,
-                  cmd.skipJargs
-                )
-            }
-        }
+        runMain(project, cmd)(state)
       }
     }
 
@@ -581,6 +593,58 @@ object Interpreter {
       }
 
       if (cmd.watch) watch(projects, state)(runTask) else runTask(state)
+    }
+  }
+
+  private def benchmark(cmd: Commands.Benchmark, state: State): Task[State] = {
+    import state.logger
+    val lookup = lookupProjects(cmd.projects, state, Tasks.pickBenchmarkProject(_, state))
+    if (lookup.missing.nonEmpty) Task.now(reportMissing(lookup.missing, state))
+    else {
+      // Projects to benchmark != projects that need compiling
+      val userDefinedProjects = lookup.found
+      val (projectsToCompile, projectsToTest) = {
+        if (!cmd.cascade) {
+          val projectsToTest = {
+            if (!cmd.includeDependencies) userDefinedProjects
+            else userDefinedProjects.flatMap(p => Dag.dfs(state.build.getDagFor(p)))
+          }
+
+          (userDefinedProjects, projectsToTest)
+        } else {
+          val result = Dag.inverseDependencies(state.build.dags, userDefinedProjects)
+          (result.reduced, result.strictlyInverseNodes)
+        }
+      }
+
+      logger.debug(
+        s"Preparing compilation of ${projectsToCompile.mkString(", ")} transitively"
+      )(DebugFilter.Test)
+
+      def benchmarkAllProjects(state: State): Task[State] = {
+        compileAnd(cmd, state, projectsToCompile, false, "`run`") { state =>
+          logger.debug(s"Preparing benchmark execution for ${projectsToTest.mkString(", ")}")(DebugFilter.Test)
+
+          val runCommand = Commands.Run(
+            projects = userDefinedProjects.map(_.name),
+            main = Some("org.openjdk.jmh.Main"),
+            incremental = cmd.incremental,
+            pipeline = cmd.pipeline,
+            reporter = cmd.reporter,
+            args = cmd.args,
+            skipJargs = cmd.skipJargs,
+            optimize = cmd.optimize,
+            cliOptions = cmd.cliOptions
+          )
+
+          userDefinedProjects.foldLeft(Task.now(state)) {
+            case (stateTask, p) => stateTask.flatMap(runMain(p, runCommand)(_))
+          }
+        }
+      }
+
+      if (!cmd.watch) benchmarkAllProjects(state)
+      else watch(projectsToCompile, state)(benchmarkAllProjects)
     }
   }
 

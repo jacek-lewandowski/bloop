@@ -97,6 +97,11 @@ object Bloop extends CaseApp[CliOptions] {
         val action = Run(command, Exit(ExitStatus.Ok))
         run(waitForState(action, Interpreter.execute(action, Task.now(state))), options)
 
+      case Array("benchmark", projectName, args @ _*) =>
+        val command = Commands.Benchmark(List(projectName), args = args.toList)
+        val action = Run(command, Exit(ExitStatus.Ok))
+        run(waitForState(action, Interpreter.execute(action, Task.now(state))), options)
+
       case Array("runMain", projectName, mainClass, args @ _*) =>
         val command = Commands.Run(List(projectName), Some(mainClass), args = args.toList)
         val action = Run(command, Exit(ExitStatus.Ok))
