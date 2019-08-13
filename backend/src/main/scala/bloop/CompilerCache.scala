@@ -7,7 +7,13 @@ import java.util.concurrent.ConcurrentHashMap
 
 import javax.tools.JavaFileManager.Location
 import javax.tools.JavaFileObject.Kind
-import javax.tools.{FileObject, ForwardingJavaFileManager, ForwardingJavaFileObject, JavaFileManager, JavaFileObject, StandardJavaFileManager, JavaCompiler => JavaxCompiler}
+import javax.tools.{
+  FileObject,
+  ForwardingJavaFileManager,
+  JavaFileManager,
+  JavaFileObject,
+  JavaCompiler => JavaxCompiler
+}
 import bloop.io.{AbsolutePath, Paths}
 import bloop.logging.Logger
 import sbt.librarymanagement.Resolver
@@ -18,10 +24,13 @@ import xsbti.compile.ClassFileManager
 import xsbti.{Logger => XLogger, Reporter => XReporter}
 import sbt.internal.inc.bloop.ZincInternals
 import sbt.internal.inc.{AnalyzingCompiler, ZincLmUtil, ZincUtil}
-import sbt.internal.inc.javac.JavaTools
-import sbt.internal.inc.javac.{ForkedJava, JavaCompiler, Javadoc}
+import sbt.internal.inc.javac.{
+  DiagnosticsReporter,
+  JavaTools,
+  Javadoc,
+  WriteReportingJavaFileObject
+}
 import sbt.internal.util.LoggerWriter
-import sbt.internal.inc.javac.DiagnosticsReporter
 import java.io.IOException
 import java.nio.file.Files
 
@@ -292,8 +301,14 @@ final class CompilerCache(
         }.asJava
       }
 
-      override def isSameFile(a: FileObject, b: FileObject): Boolean =
-        a == b
+      // Needed because JavaFileManager doesn't expect WriteReportingJavaFileObjects in isSameFile, fixes #956
+      override def isSameFile(a: FileObject, b: FileObject): Boolean = {
+        def unwrap(fo: FileObject): FileObject = fo match {
+          case wrfo: WriteReportingJavaFileObject => wrfo.javaFileObject
+          case other => other
+        }
+        super.isSameFile(unwrap(a), unwrap(b))
+      }
     }
   }
 }
