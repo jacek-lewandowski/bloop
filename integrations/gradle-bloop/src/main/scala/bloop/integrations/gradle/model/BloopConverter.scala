@@ -6,19 +6,12 @@ import java.nio.file.Paths
 import java.nio.file.Files
 
 import bloop.config.Config
-import bloop.config.Config.{
-  CompileOrder,
-  CompileSetup,
-  JavaThenScala,
-  JvmConfig,
-  Mixed,
-  Platform,
-  TestArgument,
-  TestOptions
-}
+import bloop.config.Config.{CompileOrder, CompileSetup, JavaThenScala, JvmConfig, Mixed, Platform, TestArgument, TestOptions}
 import bloop.integrations.gradle.BloopParameters
 import bloop.integrations.gradle.model.BloopConverter.SourceSetDep
 import bloop.integrations.gradle.syntax._
+import org.apache.tools.ant.util.StringUtils
+import org.codehaus.groovy.util.StringUtil
 import org.gradle.api.{GradleException, Project}
 import org.gradle.api.artifacts._
 import org.gradle.api.artifacts.result.ResolvedArtifactResult
@@ -37,6 +30,7 @@ import org.gradle.jvm.JvmLibrary
 import org.gradle.language.base.artifact.SourcesArtifact
 import org.gradle.language.java.artifact.JavadocArtifact
 import org.gradle.plugins.ide.internal.tooling.java.DefaultInstalledJdk
+import org.gradle.util.GUtil
 
 import scala.collection.JavaConverters._
 import scala.util.{Failure, Success, Try}
@@ -230,11 +224,13 @@ final class BloopConverter(parameters: BloopParameters) {
       val modules = (nonProjectDependencies.map(artifactToConfigModule(_, project)) ++
         additionalArtifacts.map(artifactToConfigModule(_, project))).distinct
 
-      val annotationProcessorPaths =
-        Option(project.getConfiguration("annotationProcessor")) match {
+      val annotationProcessorPaths = {
+        val confName = getConfigurationName(sourceSet, "annotationProcessor")
+        Option(project.getConfiguration(confName)) match {
           case None => List.empty
           case Some(conf) => conf.getResolvedConfiguration.getFiles.asScala.toList.map(_.toPath)
         }
+      }
 
       for {
         scalaConfig <- getScalaConfig(project, sourceSet, compileArtifacts)
@@ -785,6 +781,20 @@ final class BloopConverter(parameters: BloopParameters) {
   private def splitFlags(values: List[String]): List[String] = {
     values.flatMap(value => value.split(argumentSpaceSeparator))
   }
+
+  private def getConfigurationName(sourceSet: SourceSet, configurationName: String): String = {
+    // we could use DefaultSourceSet#configurationNameOf, but it is private and exists only in DefaultSourceSet
+    val baseName = if (sourceSet.getName == "main") ""
+    else GUtil.toCamelCase(sourceSet.getName)
+    uncapitalize(baseName + capitalize(configurationName))
+  }
+
+  private def uncapitalize(str: String): String =
+    if (str.isEmpty) str else str.charAt(0).toLower + str.substring(1)
+
+  private def capitalize(str: String): String =
+    if (str.isEmpty) str else str.charAt(0).toUpper + str.substring(1)
+
 }
 
 object BloopConverter {
