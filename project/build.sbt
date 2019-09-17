@@ -5,7 +5,7 @@ val circeDerivation = "io.circe" %% "circe-derivation" % "0.9.0-M3"
 val `bloop-build` = project
   .in(file("."))
   .settings(
-    scalaVersion := "2.12.4",
+    scalaVersion := "2.12.9",
     addSbtPlugin("com.dwijnand" % "sbt-dynver" % "3.1.0"),
     addSbtPlugin("ohnosequences" % "sbt-github-release" % "0.6.0"),
     addSbtPlugin("com.lucidchart" % "sbt-scalafmt" % "1.14"),
@@ -18,6 +18,7 @@ val `bloop-build` = project
     addSbtPlugin("com.typesafe.sbt" % "sbt-ghpages" % "0.6.2"),
     addSbtPlugin("io.get-coursier" % "sbt-coursier" % "1.1.0-M13-2"),
     addSbtPlugin("org.scalameta" % "sbt-mdoc" % "1.2.10"),
+    addSbtPlugin("org.scala-debugger" % "sbt-jdi-tools" % "1.1.1"),
     libraryDependencies += { "org.scala-sbt" %% "scripted-plugin" % sbtVersion.value },
     // Let's add our sbt plugin to the sbt too ;)
     unmanagedSourceDirectories in Compile ++= {

@@ -8,7 +8,7 @@ import bloop.engine.caches.ResultsCache
 import bloop.logging.DebugFilter
 import bloop.data.{Platform, Project}
 import bloop.engine.{Dag, State}
-import bloop.exec.{Forker, JavaEnv}
+import bloop.exec.{Forker, JavaEnv, JvmProcessForker}
 import bloop.io.AbsolutePath
 import bloop.util.JavaCompat.EnrichOptional
 import bloop.testing.{LoggingEventHandler, TestSuiteEvent, TestSuiteEventHandler}
@@ -98,7 +98,8 @@ object Tasks {
       testFilter: String => Boolean,
       testEventHandler: TestSuiteEventHandler,
       failIfNoTestFrameworks: Boolean,
-      runInParallel: Boolean = false
+      runInParallel: Boolean = false,
+      mode: RunMode
   ): Task[State] = {
     import state.logger
     implicit val logContext: DebugFilter = DebugFilter.Test
@@ -127,7 +128,8 @@ object Tasks {
         userTestOptions,
         testFilter,
         failureHandler,
-        failIfNoTestFrameworks
+        failIfNoTestFrameworks,
+        mode
       )
     }
 
@@ -158,6 +160,7 @@ object Tasks {
    * @param fqn       The fully qualified name of the main class.
    * @param args      The arguments to pass to the main class.
    * @param skipJargs Skip the interpretation of `-J` options in `args`.
+   * @param mode      The run mode.
    */
   def runJVM(
       state: State,
@@ -166,13 +169,14 @@ object Tasks {
       cwd: AbsolutePath,
       fqn: String,
       args: Array[String],
-      skipJargs: Boolean
+      skipJargs: Boolean,
+      mode: RunMode
   ): Task[State] = {
     val dag = state.build.getDagFor(project)
     val classpath = project.fullClasspath(dag, state.client)
-    val processConfig = Forker(javaEnv, classpath)
+    val forker = JvmProcessForker(javaEnv, classpath, mode)
     val runTask =
-      processConfig.runMain(cwd, fqn, args, skipJargs, state.logger, state.commonOptions)
+      forker.runMain(cwd, fqn, args, skipJargs, state.logger, state.commonOptions)
     runTask.map { exitCode =>
       val exitStatus = Forker.exitStatus(exitCode)
       state.mergeStatus(exitStatus)
