@@ -623,10 +623,14 @@ final class BloopConverter(parameters: BloopParameters) {
       sourceSet: SourceSet,
       artifacts: List[ResolvedArtifact]
   ): Try[Option[Config.Scala]] = {
+
     def isJavaOnly: Boolean = {
       val allSourceFiles = sourceSet.getAllSource.getFiles.asScala.toList
       !allSourceFiles.filter(f => f.exists && f.isFile).exists(_.getName.endsWith(".scala"))
     }
+
+    lazy val isJava: Boolean =
+      isJavaProject(project) && sourceSet.getJava.getSourceDirectories.asScala.exists(_.exists())
 
     // Finding the compiler group and version from the standard Scala library added as dependency
     artifacts.find(_.getName == parameters.stdLibName) match {
@@ -641,9 +645,7 @@ final class BloopConverter(parameters: BloopParameters) {
           val opts = scalaCompileTask.getScalaCompileOptions
           val options = optionList(opts)
           val compilerName = parameters.compilerName
-          val compileOrder =
-            if (!sourceSet.getJava.getSourceDirectories.isEmpty) JavaThenScala
-            else Mixed
+          val compileOrder = if (isJava) JavaThenScala else Mixed
           val setup = CompileSetup.empty.copy(order = compileOrder)
 
           // Use the compile setup and analysis out defaults, Gradle doesn't expose its customization
