@@ -332,7 +332,7 @@ final class BloopConverter(parameters: BloopParameters) {
       else
         targetConfigName.asInstanceOf[String]
     } catch {
-      case _: NoSuchMethodException => projectDependency.getConfiguration;
+      case _: NoSuchMethodException => projectDependency.getTargetConfiguration;
     }
   }
 
