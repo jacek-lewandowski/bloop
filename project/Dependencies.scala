@@ -6,13 +6,13 @@ object Dependencies {
   val Scala212Version = "2.12.8"
 
   val Sbt013Version = "0.13.18"
-  val Sbt1Version   = "1.2.8"
+  val Sbt1Version = "1.2.8"
 
   val nailgunVersion = "ee3c4343"
   // Used to download the python client instead of resolving
   val nailgunCommit = "d7ed5db"
 
-  val zincVersion = "1.3.0-M4+25-0283d5c6"
+  val zincVersion = "1.3.0-M4+26-045d2c8c"
   val bspVersion = "2.0.0-M4+10-61e61e87"
   val javaDebugVersion = "0.21.0+1-7f1080f1"
 
@@ -50,10 +50,13 @@ object Dependencies {
   val zipkinSenderVersion = "2.7.15"
   val jnaVersion = "4.5.0"
   val asmVersion = "6.0"
+  val snailgunVersion = "0.3.1"
+  val ztExecVersion = "1.11"
 
   import sbt.librarymanagement.syntax.stringToOrganization
   val zinc = "ch.epfl.scala" %% "zinc" % zincVersion
-  val bsp = "ch.epfl.scala" %% "bsp4s" % bspVersion
+  val bsp4s = "ch.epfl.scala" %% "bsp4s" % bspVersion
+  val bsp4j = "ch.epfl.scala" % "bsp4j" % bspVersion
   val nailgun = "ch.epfl.scala" % "nailgun-server" % nailgunVersion
   val javaDebug = "ch.epfl.scala" % "com-microsoft-java-debug-core" % javaDebugVersion
 
@@ -69,6 +72,9 @@ object Dependencies {
   val sourcecode = "com.lihaoyi" %% "sourcecode" % sourcecodeVersion
   val sbtTestInterface = "org.scala-sbt" % "test-interface" % sbtTestInterfaceVersion
   val sbtTestAgent = "org.scala-sbt" % "test-agent" % sbtTestAgentVersion
+  val snailgun = ("me.vican.jorge" %% "snailgun-cli" % snailgunVersion)
+  val ztExec = "org.zeroturnaround" % "zt-exec" % ztExecVersion
+  val slf4jNop = "org.slf4j" % "slf4j-nop" % "1.7.2"
 
   val scalatest = "org.scalatest" % "scalatest_2.12" % "3.0.5"
   val utest = "com.lihaoyi" %% "utest" % "0.6.6"

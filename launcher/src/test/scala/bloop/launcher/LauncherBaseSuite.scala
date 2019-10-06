@@ -3,8 +3,8 @@ package bloop.launcher
 import bloop.io.Paths
 import bloop.io.AbsolutePath
 import bloop.testing.BaseSuite
-import bloop.launcher.core.Shell
-import bloop.launcher.util.Environment
+import bloop.bloopgun.core.Shell
+import bloop.bloopgun.util.Environment
 import bloop.internal.build.BuildTestInfo
 
 import java.nio.file.Files
@@ -17,6 +17,13 @@ import scala.concurrent.Promise
 import scala.collection.JavaConverters._
 
 import coursier.paths.CoursierPaths
+import java.io.ByteArrayInputStream
+import bloop.bloopgun.BloopgunCli
+import java.io.PrintStream
+import bloop.bloopgun.ServerConfig
+import bloop.launcher.core.Installer
+import bloop.bloopgun.core.ServerStatus
+import snailgun.logging.SnailgunLogger
 
 /**
  * Defines a base suite to test the launcher. The test suite hijacks system
@@ -29,6 +36,8 @@ abstract class LauncherBaseSuite(
     val bspVersion: String,
     val bloopServerPort: Int
 ) extends BaseSuite {
+  val defaultConfig = ServerConfig(port = Some(bloopServerPort))
+
   val oldEnv = System.getenv()
   val oldCwd = AbsolutePath(System.getProperty("user.dir"))
   val oldHomeDir = AbsolutePath(System.getProperty("user.home"))
@@ -39,7 +48,6 @@ abstract class LauncherBaseSuite(
   val bloopBinDirectory = AbsolutePath(Files.createTempDirectory("bsp-bin"))
 
   protected val shellWithPython = new Shell(true, true)
-  protected val shellWithNoPython = new Shell(true, false)
   protected val bloopInstallerURL = installpyURL(bloopVersion)
 
   // Init code acting as beforeAll()
@@ -48,10 +56,17 @@ abstract class LauncherBaseSuite(
   System.setProperty("ivy.home", ivyHome.syntax)
   System.setProperty("bloop.home", AbsolutePath(BuildTestInfo.baseDirectory).syntax)
   System.setProperty("coursier.cache", coursierCacheDir.syntax)
+
+  // Hijack so that lookup for bloop in PATH fails even if this machine has bloop installed
   val hijackedBloop = bloopBinDirectory.resolve("bloop")
+  val hijackedBloopServer = bloopBinDirectory.resolve("blp-server")
   writeFile(hijackedBloop, "I am not a script and I must fail to be executed")
+  // Add empty contents to blp-server so that `ServerStatus.findServerToRun` doesn't find a valid server
+  writeFile(hijackedBloopServer, "")
   hijackedBloop.toFile.setExecutable(true)
+  hijackedBloopServer.toFile.setExecutable(true)
   assertIsFile(hijackedBloop)
+  assertIsFile(hijackedBloopServer)
 
   private def isStable(bloopVersion: String): Boolean = !bloopVersion.contains("-")
   private def shouldSkipTestSuite(bloopVersion: String): Boolean = {
@@ -103,19 +118,21 @@ abstract class LauncherBaseSuite(
     }
   }
 
-  private def stopServer(complainIfError: Boolean): Unit = {
-    val bloopPath = Environment.defaultBloopDirectory.resolve("bloop")
-    if (Files.exists(bloopPath)) {
-      // Kill the server in case it's potentially running in the background
-      val script = bloopPath.toAbsolutePath.toString
-      // Use ng-stop instead of exit b/c it closes the nailgun server but leaves threads hanging
-      val exitCmd = List(script, "--nailgun-port", bloopServerPort.toString, "ng-stop")
-      val exitStatus = shellWithPython.runCommand(exitCmd, Environment.cwd, Some(5))
-      if (!exitStatus.isOk && complainIfError) {
-        System.err.println(s"${exitCmd.mkString(" ")} produced:")
-        if (!exitStatus.output.isEmpty)
-          printQuoted(exitStatus.output, System.err)
-      }
+  def stopServer(complainIfError: Boolean): Unit = {
+    val dummyIn = new ByteArrayInputStream(new Array(0))
+    val out = new ByteArrayOutputStream()
+    val ps = new PrintStream(out)
+    val bloopgunShell = bloop.bloopgun.core.Shell.default
+    val cli = new BloopgunCli(bloopVersion, dummyIn, ps, ps, bloopgunShell)
+
+    // Use ng-stop instead of exit b/c it closes the nailgun server but leaves threads hanging
+    val exitCmd = List("--nailgun-port", bloopServerPort.toString, "exit")
+    val code = cli.run(exitCmd.toArray)
+
+    if (code != 0 && complainIfError) {
+      val output = out.toByteArray()
+      if (!output.isEmpty)
+        printQuoted(new String(out.toByteArray(), StandardCharsets.UTF_8), System.err)
     }
   }
 
@@ -204,9 +221,9 @@ abstract class LauncherBaseSuite(
       ps,
       StandardCharsets.UTF_8,
       shell,
+      None,
       port,
-      startedServer,
-      _ => bloopInstallerURL
+      startedServer
     )
     val run = new LauncherRun(launcher, baos)
 
@@ -291,7 +308,7 @@ abstract class LauncherBaseSuite(
         case Some(LauncherStatus.SuccessfulRun) => ()
         case unexpected =>
           System.err.println(launcherLogs.mkString(System.lineSeparator))
-          fail(s"Expected 'SuccessfulRun', obtained ${unexpected}! Printing logs:")
+          fail(s"Expected 'SuccessfulRun', obtained ${unexpected}!")
       }
     }
   }
@@ -416,5 +433,28 @@ abstract class LauncherBaseSuite(
     } else {
       BuildTestInfo.versionedInstallScript.toPath.toUri().toURL()
     }
+  }
+
+  def detectServerState(bloopVersion: String, shell: Shell): Option[ServerStatus] = {
+    val out = new ByteArrayOutputStream()
+    val logger = new SnailgunLogger("launcher", new PrintStream(out), false)
+    ServerStatus.findServerToRun(bloopVersion, None, shell, logger)
+    /*
+    shell.detectBloopInSystemPath(List("bloop") ++ bloopAdditionalCliArgs, out).orElse {
+      // The binary is not available in the classpath
+      val homeBloopDir = Environment.defaultBloopDirectory
+      if (!Files.exists(homeBloopDir)) None
+      else {
+        // This is the nailgun script that we can use to run bloop
+        val binaryName = if (Environment.isWindows) "bloop.cmd" else "bloop"
+        val pybloop = homeBloopDir.resolve(binaryName)
+        if (!Files.exists(pybloop)) None
+        else {
+          val binaryInHome = pybloop.normalize.toAbsolutePath.toString
+          shell.detectBloopInSystemPath(List(binaryInHome) ++ bloopAdditionalCliArgs, out)
+        }
+      }
+    }
+   */
   }
 }

@@ -17,6 +17,7 @@ import java.nio.file.Files
 import java.util.concurrent.TimeUnit
 
 import scala.concurrent.duration.FiniteDuration
+import monix.execution.misc.NonFatal
 
 object FileWatchingSpec extends BaseSuite {
   test("simulate an incremental compiler session with file watching enabled") {
@@ -116,19 +117,18 @@ object FileWatchingSpec extends BaseSuite {
           // Write two events, notifications should be buffered and trigger one compilation
           _ <- Task(writeFile(`C`.srcFor("C.scala"), Sources.`C2.scala`))
           _ <- Task(writeFile(`C`.srcFor("D.scala"), Sources.`D2.scala`))
-          // Write another change with a delay, no recompilation should happen
-          // because consumer is still busy with the previous compilation
+          // Write another even, which should be processed immediately after the previous batch
           _ <- Task(writeFile(`C`.srcFor("D.scala"), Sources.`D3.scala`))
-            .delayExecution(FiniteDuration(900, TimeUnit.MILLISECONDS))
-          _ <- waitUntilIteration(2)
+            .delayExecution(FiniteDuration(600, TimeUnit.MILLISECONDS))
+          _ <- waitUntilIteration(3)
           firstWatchedState <- Task(testValidLatestState)
           _ <- Task(writeFile(`C`.baseDir.resolve("E.scala"), Sources.`C.scala`))
-          _ <- waitUntilIteration(2)
+          _ <- waitUntilIteration(3)
           secondWatchedState <- Task(testValidLatestState)
           // Revert to change without macro calls, third compilation should happen
           _ <- Task(writeFile(`C`.srcFor("C.scala"), Sources.`C.scala`))
           _ <- Task(writeFile(`C`.srcFor("D.scala"), Sources.`D.scala`))
-          _ <- waitUntilIteration(3)
+          _ <- waitUntilIteration(4)
           thirdWatchedState <- Task(testValidLatestState)
         } yield {
           assert(firstWatchedState.status == ExitStatus.Ok)
@@ -155,22 +155,121 @@ object FileWatchingSpec extends BaseSuite {
     }
   }
 
+  test("don't act on MODIFY events with size == 0 right away") {
+    TestUtil.withinWorkspace { workspace =>
+      import ExecutionContext.ioScheduler
+      object Sources {
+        val `A.scala` =
+          """/A.scala
+            |class A {
+            |  def foo(s: String) = s.toString
+            |}
+          """.stripMargin
+
+        val `B.scala` =
+          """/B.scala
+            |object B extends A
+          """.stripMargin
+
+        val `A2.scala` =
+          """/A.scala
+          """.stripMargin
+
+        val `A3.scala` =
+          """/A.scala
+            |class A {
+            |  def foo2(s: String) = s.toString
+            |}
+          """.stripMargin
+      }
+
+      val `A` = TestProject(workspace, "a", List(Sources.`A.scala`))
+      val `B` = TestProject(workspace, "b", List(Sources.`B.scala`), List(`A`))
+      val projects = List(`A`, `B`)
+
+      val initialState = loadState(workspace, projects, new RecordingLogger())
+      val compiledState = initialState.compile(`B`)
+      assert(compiledState.status == ExitStatus.Ok)
+      assertValidCompilationState(compiledState, projects)
+
+      val (logObserver, logsObservable) =
+        Observable.multicast[(String, String)](MulticastStrategy.replay)(ioScheduler)
+      val logger = new PublisherLogger(logObserver, debug = true, DebugFilter.All)
+
+      val futureWatchedCompiledState =
+        compiledState.withLogger(logger).compileHandle(`B`, watch = true)
+
+      val HasIterationStoppedMsg = s"Watching ${numberDirsOf(compiledState.getDagFor(`B`))}"
+      def waitUntilIteration(totalIterations: Int): Task[Unit] =
+        waitUntilWatchIteration(logsObservable, totalIterations, HasIterationStoppedMsg)
+
+      def testValidLatestState: TestState = {
+        val state = compiledState.getLatestSavedStateGlobally()
+        assert(state.status == ExitStatus.Ok)
+        assertValidCompilationState(state, projects)
+        state
+      }
+
+      TestUtil.await(FiniteDuration(10, TimeUnit.SECONDS)) {
+        for {
+          _ <- waitUntilIteration(1)
+          initialWatchedState <- Task(testValidLatestState)
+          // Write two events, notifications should be buffered and trigger one compilation
+          _ <- Task(writeFile(`A`.srcFor("A.scala"), Sources.`A2.scala`))
+          // Write another change with a delay to simulate remote development in VS Code
+          _ <- Task(writeFile(`A`.srcFor("A.scala"), Sources.`A3.scala`))
+            .delayExecution(FiniteDuration(250, TimeUnit.MILLISECONDS))
+          _ <- waitUntilIteration(2)
+          firstWatchedState <- Task(testValidLatestState)
+          _ <- Task(writeFile(`A`.srcFor("A.scala"), Sources.`A2.scala`))
+          _ <- waitUntilIteration(3)
+          secondWatchedState <- Task(compiledState.getLatestSavedStateGlobally())
+        } yield {
+          Predef.assert(firstWatchedState.status == ExitStatus.Ok)
+          Predef.assert(secondWatchedState.status == ExitStatus.Ok)
+          val targetBPath = TestUtil.universalPath("b/src/B.scala")
+          assertNoDiff(
+            logger.renderErrors(exceptContaining = "Failed to compile"),
+            s"""|[E1] ${targetBPath}:1:18
+                |     not found: type A
+                |     L1: object B extends A
+                |                          ^
+                |$targetBPath: L1 [E1]
+                |""".stripMargin
+          )
+        }
+      }
+    }
+  }
+
   def waitUntilWatchIteration(
       logsObservable: Observable[(String, String)],
       totalIterations: Int,
       targetMsg: String
   ): Task[Unit] = {
+
     def count(ps: List[(String, String)]) = ps.count(_._2.contains(targetMsg))
 
     def waitForIterationFor(duration: FiniteDuration): Task[Unit] = {
       logsObservable
         .takeByTimespan(duration)
         .toListL
-        .map(ps => assert(totalIterations == count(ps)))
+        .map { logs =>
+          val obtainedIterations = count(logs)
+          try assert(totalIterations == obtainedIterations)
+          catch {
+            case NonFatal(t) =>
+              val output = logs.map {
+                case (level, log) => s"[$level] $log"
+              }
+              System.err.println(output.mkString(System.lineSeparator()))
+              throw t
+          }
+        }
     }
 
     waitForIterationFor(FiniteDuration(1500, "ms"))
-      .onErrorFallbackTo(waitForIterationFor(FiniteDuration(3000, "ms")))
+      .onErrorFallbackTo(waitForIterationFor(FiniteDuration(5000, "ms")))
   }
 
   test("cancel file watcher") {

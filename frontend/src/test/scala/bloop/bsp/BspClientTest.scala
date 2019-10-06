@@ -21,8 +21,10 @@ import monix.execution.{ExecutionModel, Scheduler}
 import monix.{eval => me}
 import sbt.internal.util.MessageOnlyException
 
+import scala.collection.mutable
 import scala.concurrent.duration.FiniteDuration
 import scala.meta.jsonrpc.{BaseProtocolMessage, LanguageClient, LanguageServer, Response, Services}
+import scala.concurrent.Promise
 
 object BspClientTest extends BspClientTest
 trait BspClientTest {
@@ -234,7 +236,8 @@ trait BspClientTest {
   def addServicesTest(
       configDir: AbsolutePath,
       compileIteration: () => Int,
-      record: (bsp.BuildTargetIdentifier, StringBuilder => StringBuilder) => Unit
+      record: (bsp.BuildTargetIdentifier, StringBuilder => StringBuilder) => Unit,
+      compileStartPromises: Option[mutable.HashMap[bsp.BuildTargetIdentifier, Promise[Unit]]]
   ): Services => Services = { (s: Services) =>
     s.notification(endpoints.Build.taskStart) { taskStart =>
         taskStart.dataKind match {
@@ -243,13 +246,18 @@ trait BspClientTest {
             bsp.CompileTask.decodeCompileTask(json.hcursor) match {
               case Left(failure) => ()
               case Right(compileTask) =>
+                compileStartPromises.foreach(
+                  promises => promises.get(compileTask.target).map(_.trySuccess(()))
+                )
                 record(
                   compileTask.target,
                   (builder: StringBuilder) => {
-                    builder.++=(s"#${compileIteration()}: task start ${taskStart.taskId.id}\n")
-                    taskStart.message.foreach(msg => builder.++=(s"  -> Msg: ${msg}\n"))
-                    taskStart.dataKind.foreach(msg => builder.++=(s"  -> Data kind: ${msg}\n"))
-                    builder
+                    builder.synchronized {
+                      builder.++=(s"#${compileIteration()}: task start ${taskStart.taskId.id}\n")
+                      taskStart.message.foreach(msg => builder.++=(s"  -> Msg: ${msg}\n"))
+                      taskStart.dataKind.foreach(msg => builder.++=(s"  -> Data kind: ${msg}\n"))
+                      builder
+                    }
                   }
                 )
             }
@@ -267,12 +275,14 @@ trait BspClientTest {
                 record(
                   report.target,
                   (builder: StringBuilder) => {
-                    builder.++=(s"#${compileIteration()}: task finish ${taskFinish.taskId.id}\n")
-                    builder.++=(s"  -> errors ${report.errors}, warnings ${report.warnings}\n")
-                    report.originId.foreach(originId => builder.++=(s"  -> origin = $originId\n"))
-                    taskFinish.message.foreach(msg => builder.++=(s"  -> Msg: ${msg}\n"))
-                    taskFinish.dataKind.foreach(msg => builder.++=(s"  -> Data kind: ${msg}\n"))
-                    builder
+                    builder.synchronized {
+                      builder.++=(s"#${compileIteration()}: task finish ${taskFinish.taskId.id}\n")
+                      builder.++=(s"  -> errors ${report.errors}, warnings ${report.warnings}\n")
+                      report.originId.foreach(originId => builder.++=(s"  -> origin = $originId\n"))
+                      taskFinish.message.foreach(msg => builder.++=(s"  -> Msg: ${msg}\n"))
+                      taskFinish.dataKind.foreach(msg => builder.++=(s"  -> Data kind: ${msg}\n"))
+                      builder
+                    }
                   }
                 )
             }
@@ -286,36 +296,38 @@ trait BspClientTest {
           record(
             btid,
             (builder: StringBuilder) => {
-              val pathString = {
-                val baseDir = {
-                  // Find out the current working directory of the workspace instead of project
-                  var bdir = AbsolutePath(ProjectUris.toPath(btid.uri))
-                  val workspaceFileName = configDir.underlying.getParent.getFileName
-                  while (!bdir.underlying.endsWith(workspaceFileName)) {
-                    bdir = bdir.getParent
+              builder.synchronized {
+                val pathString = {
+                  val baseDir = {
+                    // Find out the current working directory of the workspace instead of project
+                    var bdir = AbsolutePath(ProjectUris.toPath(btid.uri))
+                    val workspaceFileName = configDir.underlying.getParent.getFileName
+                    while (!bdir.underlying.endsWith(workspaceFileName)) {
+                      bdir = bdir.getParent
+                    }
+                    bdir
                   }
-                  bdir
+
+                  val abs = AbsolutePath(tid.uri.toPath)
+                  if (!abs.underlying.startsWith(baseDir.underlying)) abs.toString
+                  else abs.toRelative(baseDir).toString
                 }
 
-                val abs = AbsolutePath(tid.uri.toPath)
-                if (!abs.underlying.startsWith(baseDir.underlying)) abs.toString
-                else abs.toRelative(baseDir).toString
-              }
+                val canonical = pathString.replace(File.separatorChar, '/')
+                val report = diagnostics.map(
+                  _.toString
+                    .replace("\n", " ")
+                    .replace(System.lineSeparator, " ")
+                )
+                builder
+                  .++=(s"#${compileIteration()}: $canonical\n")
+                  .++=(s"  -> $report\n")
+                  .++=(s"  -> reset = $reset\n")
 
-              val canonical = pathString.replace(File.separatorChar, '/')
-              val report = diagnostics.map(
-                _.toString
-                  .replace("\n", " ")
-                  .replace(System.lineSeparator, " ")
-              )
-              builder
-                .++=(s"#${compileIteration()}: $canonical\n")
-                .++=(s"  -> $report\n")
-                .++=(s"  -> reset = $reset\n")
-
-              originId match {
-                case None => builder
-                case Some(originId) => builder.++=(s"  -> origin = $originId\n")
+                originId match {
+                  case None => builder
+                  case Some(originId) => builder.++=(s"  -> origin = $originId\n")
+                }
               }
             }
           )
@@ -489,7 +501,7 @@ trait BspClientTest {
         bspCmd,
         configDir,
         logger,
-        addServicesTest(configDir, () => compileIteration, addToStringReport),
+        addServicesTest(configDir, () => compileIteration, addToStringReport, None),
         addDiagnosticsHandler = false,
         userState = userState,
         userScheduler = userScheduler
