@@ -641,7 +641,8 @@ final class BloopConverter(parameters: BloopParameters) {
         val scalaCompileTask = project.getTask[ScalaCompile](scalaCompileTaskName)
 
         if (scalaCompileTask != null) {
-          val scalaJars = scalaCompileTask.getScalaClasspath.asScala.map(_.toPath).toList
+          val scalaJars = scalaCompileTask.getScalaClasspath.asScala
+            .filterNot(_.toString.contains("org.scala-sbt/compiler-bridge")).map(_.toPath).toList
           val opts = scalaCompileTask.getScalaCompileOptions
           val options = optionList(opts)
           val compilerName = parameters.compilerName
